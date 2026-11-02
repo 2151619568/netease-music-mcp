@@ -191,6 +191,30 @@ curl http://localhost:3456/health
 
 ---
 
+## REST API（供 APK / 网页调用）
+
+在托管平台环境变量中设置 `API_TOKEN`（建议使用至少 32 字节随机值）。REST API 使用 `Authorization: Bearer <API_TOKEN>` 鉴权；未设置令牌时 REST API 会返回 503，令牌错误时返回 401。原有 `/mcp` 与 `/health` 不受影响。
+
+| 方法 | 路径 | 参数 |
+|---|---|---|
+| GET | `/api/search?keywords=周杰伦` | `keywords`（或 `q`），可选 `limit` |
+| GET | `/api/song?id=歌曲ID` | `id` |
+| GET | `/api/lyric?id=歌曲ID` | `id` |
+| GET | `/api/playlist?id=歌单ID` | `id` |
+| GET | `/api/playlists` | 无 |
+| GET | `/api/daily` | 无 |
+
+示例：
+
+```bash
+curl -H "Authorization: Bearer YOUR_API_TOKEN" \
+  "https://你的域名/api/search?keywords=周杰伦&limit=5"
+```
+
+APK 应通过 HTTPS 请求，并将令牌放在 Authorization 请求头中，不要把网易云 Cookie 写入 APK。若 APK 会分发给其他人，不应把固定 API_TOKEN 硬编码在客户端；应增加自己的用户鉴权/后端代理。
+
+---
+
 ## 环境要求
 
 - Python 3.8+
