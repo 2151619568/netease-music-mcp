@@ -48,6 +48,7 @@ NETEASE_COOKIE = os.environ.get("NETEASE_COOKIE", "")
 NETEASE_CSRF = os.environ.get("NETEASE_CSRF", "")
 NETEASE_UID = os.environ.get("NETEASE_UID", "")  # optional; looked up automatically if empty
 PORT = int(os.environ.get("MCP_PORT", "3456"))
+API_TOKEN = os.environ.get("API_TOKEN", "").strip()
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 SESSION_ID = str(uuid.uuid4())
 try:
@@ -723,7 +724,7 @@ class MCPHandler(http.server.BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', '*')
+        self.send_header('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept')
     def _json_response(self, data, status=200):
         body = json.dumps(data).encode()
         self.send_response(status)
@@ -736,10 +737,73 @@ class MCPHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(204)
         self._cors()
         self.end_headers()
+    def _handle_rest_api(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
+
+        if not API_TOKEN:
+            self._json_response({"error": "REST API is not configured", "hint": "Set API_TOKEN in the hosting environment"}, 503)
+            return
+        auth = self.headers.get('Authorization', '')
+        supplied = auth[7:].strip() if auth.lower().startswith('bearer ') else ''
+        if not supplied or not secrets.compare_digest(supplied, API_TOKEN):
+            self._json_response({"error": "Unauthorized", "hint": "Send Authorization: Bearer <API_TOKEN>"}, 401)
+            return
+
+        def value(*names, default=''):
+            for name in names:
+                vals = query.get(name)
+                if vals and vals[0] != '':
+                    return vals[0]
+            return default
+
+        try:
+            if path == '/api/search':
+                keywords = value('keywords', 'q')
+                if not keywords:
+                    self._json_response({"error": "Missing required query parameter: keywords"}, 400)
+                    return
+                result = search_song({"query": keywords, "limit": min(max(int(value('limit', default='10')), 1), 10)})
+            elif path == '/api/song':
+                song_id = value('id')
+                if not song_id:
+                    self._json_response({"error": "Missing required query parameter: id"}, 400)
+                    return
+                result = get_song_details({"song_ids": song_id})
+            elif path == '/api/lyric':
+                song_id = value('id')
+                if not song_id:
+                    self._json_response({"error": "Missing required query parameter: id"}, 400)
+                    return
+                result = get_song_lyrics({"song_id": song_id})
+            elif path == '/api/playlist':
+                playlist_id = value('id')
+                if not playlist_id:
+                    self._json_response({"error": "Missing required query parameter: id"}, 400)
+                    return
+                result = get_playlist_songs({"playlist_id": playlist_id})
+            elif path == '/api/playlists':
+                result = list_my_playlists({})
+            elif path == '/api/daily':
+                result = daily_recommend({})
+            else:
+                self._json_response({"error": "Not found"}, 404)
+                return
+            self._json_response(result, 502 if isinstance(result, dict) and result.get('error') else 200)
+        except (TypeError, ValueError) as e:
+            self._json_response({"error": "Invalid query parameter", "detail": str(e)}, 400)
+        except Exception as e:
+            logger.exception("REST API error")
+            self._json_response({"error": "Internal server error"}, 500)
+
     def do_GET(self):
-        if self.path == '/health':
+        path = urllib.parse.urlsplit(self.path).path
+        if path == '/health':
             self._json_response({"status": "ok", "tools": len(TOOLS), "version": VERSION})
-        elif self.path == '/sse':
+        elif path.startswith('/api/'):
+            self._handle_rest_api()
+        elif path == '/sse':
             self._handle_sse()
         else:
             self._json_response({"error": "Not found"}, 404)
